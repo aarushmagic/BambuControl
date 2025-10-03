@@ -4,6 +4,22 @@ All notable changes to **BambuControl** are documented in this file.
 
 ---
 
+## v3 – Fuzzy Matching & Typos Tolerance
+
+### Added
+- Levenshtein Distance Algorithm: Implemented a helper function to calculate the edit distance between strings.
+- `FUZZYMATCH` Function: A new custom spreadsheet function that replaces strict equality checks with a similarity score.
+
+### Changed
+- Authorization Logic: The system now tolerates minor typos (up to 3 character edits) in First or Last names.
+- Spreadsheet Integration: The "Logs" sheet formula must be updated to call `=FUZZYMATCH()` instead of `=MATCH()`.
+
+### Security & Usability
+- Significantly reduces false alarms where authorized users were flagged as unauthorized due to minor spelling errors (e.g., "Jon" vs. "John").
+- Maintains the impersonation detection features introduced in v2.
+
+---
+
 ## v2 – Print Start Confirmation & Impersonation Detection
 
 ### Added

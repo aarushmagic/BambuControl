@@ -42,6 +42,7 @@ BambuControl automates the validation of print submissions against the authorize
 Refer to the following version for implementation details and supported features:
 * v1
 * v2
+* v3
 
 ## Disclaimer
 BambuControl is an unofficial, independent project developed for the John H. Martinson Honors Program (JMHP) at the Georgia Institute of Technology. It is not affiliated with, endorsed by, or supported by Bambu Lab, Google, or any of their subsidiaries or partners in any way.
