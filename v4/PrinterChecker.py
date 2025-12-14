@@ -23,15 +23,19 @@ PRINTER_MAP = {
     printer2: "Printer 2"
 }
 
+LOG_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/PUBLISHED_GOOGLE_SHEET_LOGS_URL&single=true&output=csv"
 
-SHEET_URL = "https://docs.google.com/spreadsheets/d/e/PUBLISHED_GOOGLE_SHEET_URL&single=true&output=csv"
+AUTH_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/PUBLISHED_GOOGLE_SHEET_AUTH_URL&single=true&output=csv"
 
-COL_FIRST_NAME = 0
-COL_PRINTER_NAME = 1
-COL_START_DATE = 2
-COL_START_TIME = 3
-COL_DURATION = 4
-COL_AUTHORIZED = 7
+COL_LOG_FIRST = 1
+COL_LOG_LAST = 2
+COL_LOG_PRINTER = 4
+COL_LOG_START_DATE = 5
+COL_LOG_START_TIME = 6
+COL_LOG_DURATION = 7
+
+COL_AUTH_LAST = 0
+COL_AUTH_FIRST = 1
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger("PrinterGuard")
@@ -42,9 +46,67 @@ class PrinterMonitor:
         if not self.token:
             logger.critical("Error: $token environment variable not set.")
             sys.exit(1)
-        self.checked_prints = {}
-        self.printer_states = {}
+
+        self.checked_prints = {} 
+        self.printer_states = {} 
         self.clients = []
+
+    def levenshtein(self, a: str, b: str) -> int:
+        if not a: return len(b)
+        if not b: return len(a)
+
+        matrix = [[0 for _ in range(len(a) + 1)] for _ in range(len(b) + 1)]
+
+        for i in range(len(b) + 1): matrix[i][0] = i
+        for j in range(len(a) + 1): matrix[0][j] = j
+
+        for i in range(1, len(b) + 1):
+            for j in range(1, len(a) + 1):
+                if b[i - 1].lower() == a[j - 1].lower():
+                    matrix[i][j] = matrix[i - 1][j - 1]
+                else:
+                    matrix[i][j] = min(
+                        matrix[i - 1][j - 1] + 1,
+                        matrix[i][j - 1] + 1,
+                        matrix[i - 1][j] + 1
+                    )
+        
+        return matrix[len(b)][len(a)]
+
+    def is_authorized(self, log_first: str, log_last: str) -> bool:
+        try:
+            response = requests.get(f"{AUTH_SHEET_URL}&t={int(time.time())}")
+            response.raise_for_status()
+            reader = csv.reader(io.StringIO(response.text))
+            auth_rows = list(reader)
+
+            log_f = log_first.strip()
+            log_l = log_last.strip()
+            
+            best_score = 999
+            
+            start_idx = 1 if "LAST" in auth_rows[0][0].upper() else 0
+
+            for row in auth_rows[start_idx:]:
+                if len(row) < 2: continue
+                
+                auth_l = row[COL_AUTH_LAST].strip()
+                auth_f = row[COL_AUTH_FIRST].strip()
+
+                f_score = self.levenshtein(log_f, auth_f)
+                l_score = self.levenshtein(log_l, auth_l)
+                total_score = f_score + l_score
+
+                if total_score < best_score:
+                    best_score = total_score
+            
+            logger.info(f"   [Fuzzy] Best Match Score: {best_score} (Threshold: 3)")
+            
+            return best_score <= 3
+
+        except Exception as e:
+            logger.error(f"   [Auth Check] Failed to fetch/parse authorized list: {e}")
+            return False
 
     def parse_duration(self, duration_str: str) -> timedelta:
         try:
@@ -56,7 +118,7 @@ class PrinterMonitor:
     
     def fetch_active_log(self, printer_name: str) -> Optional[List[str]]:
         try:
-            url = f"{SHEET_URL}&t={int(time.time())}"
+            url = f"{LOG_SHEET_URL}&t={int(time.time())}"
             response = requests.get(url)
             response.raise_for_status()
             reader = csv.reader(io.StringIO(response.text))
@@ -64,8 +126,9 @@ class PrinterMonitor:
             
             last_entry = None
             for row in reversed(rows):
-                if len(row) <= COL_AUTHORIZED: continue
-                if row[COL_PRINTER_NAME].strip() == printer_name:
+                if len(row) <= COL_LOG_DURATION: continue
+                
+                if row[COL_LOG_PRINTER].strip() == printer_name:
                     last_entry = row
                     break
             
@@ -74,15 +137,16 @@ class PrinterMonitor:
                 return None
 
             try:
-                date_str = last_entry[COL_START_DATE].strip()
-                time_str = last_entry[COL_START_TIME].strip()
-                duration_str = last_entry[COL_DURATION].strip()
+                date_str = last_entry[COL_LOG_START_DATE].strip()
+                time_str = last_entry[COL_LOG_START_TIME].strip()
+                duration_str = last_entry[COL_LOG_DURATION].strip()
                 start_dt = datetime.strptime(f"{date_str} {time_str}", "%m/%d/%Y %I:%M:%S %p")
                 duration = self.parse_duration(duration_str)
                 end_dt = start_dt + duration
                 
                 if datetime.now() <= end_dt:
-                    logger.info(f"  [Sheet] Valid: {last_entry[COL_FIRST_NAME]} until {end_dt.strftime('%H:%M')}")
+                    user_name = f"{last_entry[COL_LOG_FIRST]} {last_entry[COL_LOG_LAST]}"
+                    logger.info(f"  [Sheet] Time Valid: {user_name} until {end_dt.strftime('%H:%M')}")
                     return last_entry
                 else:
                     logger.warning(f"  [Sheet] Expired: Ended at {end_dt.strftime('%H:%M')}")
@@ -96,48 +160,40 @@ class PrinterMonitor:
 
     def enforce_rules(self, device_id: str, client: MQTTClient):
         printer_name = PRINTER_MAP.get(device_id, "Unknown")
-        logger.info(f"[{printer_name}] CHECKING GOOGLE SHEET...")
+        logger.info(f"[{printer_name}] CHECKING LOGS & AUTHORIZATION...")
 
         log_entry = self.fetch_active_log(printer_name)
 
         if not log_entry:
-            logger.warning(f"[{printer_name}] 🛑 VIOLATION: Unlogged Print. Sending STOP command.")
+            logger.warning(f"[{printer_name}] 🛑 VIOLATION: Unlogged/Expired Print. Sending STOP.")
             self.cancel_print(client, printer_name, "Unlogged")
             return
 
-        user_name = log_entry[COL_FIRST_NAME]
-        authorized = log_entry[COL_AUTHORIZED].strip().lower()
+        first_name = log_entry[COL_LOG_FIRST]
+        last_name = log_entry[COL_LOG_LAST]
+        full_name = f"{first_name} {last_name}"
 
-        if authorized != "yes":
-            logger.warning(f"[{printer_name}] 🛑 VIOLATION: Unauthorized ({user_name}). Sending STOP command.")
-            self.cancel_print(client, printer_name, f"Unauthorized: {user_name}")
+        logger.info(f"   [Auth] Verifying user: {full_name}")
+        is_allowed = self.is_authorized(first_name, last_name)
+
+        if not is_allowed:
+            logger.warning(f"[{printer_name}] 🛑 VIOLATION: Unauthorized User ({full_name}). Sending STOP.")
+            self.cancel_print(client, printer_name, f"Unauthorized: {full_name}")
         else:
-            logger.info(f"[{printer_name}] ✅ SUCCESS: Print Authorized for {user_name}.")
+            logger.info(f"[{printer_name}] ✅ SUCCESS: Print Authorized for {full_name}.")
 
     def cancel_print(self, client: MQTTClient, printer_name: str, reason: str):
         try:
-            # === INTEGRATED FIX: USE WORKING KILL CODE LOGIC ===
-            
-            # 1. Use Integer Sequence ID
             seq_id = int(time.time())
-            
             command = {
                 "print": {
                     "command": "stop",
                     "sequence_id": seq_id
                 }
             }
-            
             payload = json.dumps(command)
-            logger.info(f"[{printer_name}] Sending Kill Payload: {payload}")
-            
-            # 2. Use raw publish via internal client
-            info = client.client.publish(f"device/{client.device_id}/request", payload)
-            
-            # 3. Wait for publish confirmation
-            info.wait_for_publish()
-            logger.info(f"[{printer_name}] STOP COMMAND CONFIRMED SENT (Seq: {seq_id})")
-            
+            client.client.publish(f"device/{client.device_id}/request", payload)
+            logger.info(f"[{printer_name}] STOP COMMAND SENT (Seq: {seq_id})")
         except Exception as e:
             logger.error(f"[{printer_name}] Failed to send stop command: {e}")
 
@@ -154,9 +210,6 @@ class PrinterMonitor:
         subtask_id = current_state.get('subtask_id', 'unknown')
         printer_name = PRINTER_MAP.get(device_id, device_id)
 
-        # Verbose heartbeat (Optional: comment out if too noisy)
-        print(f"[{printer_name}] State: {gcode_state} | Layer: {layer_num} | ID: {subtask_id}", end='\r')
-
         if gcode_state == 'RUNNING' and layer_num >= 1:
             if self.checked_prints.get(device_id) != subtask_id:
                 print(f"\n[{printer_name}] TRIGGERED! Verifying print {subtask_id}...")
@@ -171,7 +224,7 @@ class PrinterMonitor:
 
     def start(self):
         printers = [printer1, printer2]
-        logger.info(f"Starting Printer Police (Final) for UID: {USER_UID}")
+        logger.info(f"Starting Printer Police (Fuzzy Match) for UID: {USER_UID}")
 
         for serial in printers:
             client = MQTTClient(username=USER_UID, access_token=self.token, device_id=serial, on_message=self.on_message)
