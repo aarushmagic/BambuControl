@@ -11,17 +11,34 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 from bambulab import MQTTClient
 
-printer1 = "asdfghjkl1234"
-printer2 = "asdfghjkl5678"
-USER_UID = "0123456789"
+PRINTER_SERIAL_1 = os.getenv("PRINTER_SERIAL_1")
+PRINTER_SERIAL_2 = os.getenv("PRINTER_SERIAL_2")
+BAMBU_USER_ID = os.getenv("BAMBU_USER_ID")
+BAMBU_ACCESS_TOKEN = os.getenv("BAMBU_ACCESS_TOKEN")
+LOG_SHEET_URL = os.getenv("LOG_SHEET_URL")
+AUTH_SHEET_URL = os.getenv("AUTH_SHEET_URL")
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%H:%M:%S')
+logger = logging.getLogger("PrinterGuard")
+
+required_vars = [
+    ("PRINTER_SERIAL_1", PRINTER_SERIAL_1),
+    ("PRINTER_SERIAL_2", PRINTER_SERIAL_2),
+    ("BAMBU_USER_ID", BAMBU_USER_ID),
+    ("BAMBU_ACCESS_TOKEN", BAMBU_ACCESS_TOKEN),
+    ("LOG_SHEET_URL", LOG_SHEET_URL),
+    ("AUTH_SHEET_URL", AUTH_SHEET_URL)
+]
+
+missing_vars = [name for name, val in required_vars if not val]
+if missing_vars:
+    logger.critical(f"Error: Missing environment variables: {', '.join(missing_vars)}")
+    sys.exit(1)
 
 PRINTER_MAP = {
-    printer1: "Printer 1",
-    printer2: "Printer 2"
+    PRINTER_SERIAL_1: "Printer 1",
+    PRINTER_SERIAL_2: "Printer 2"
 }
-
-LOG_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/PUBLISHED_GOOGLE_SHEET_LOGS_URL&single=true&output=csv"
-AUTH_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/PUBLISHED_GOOGLE_SHEET_AUTH_URL&single=true&output=csv"
 
 COL_LOG_FIRST = 1
 COL_LOG_LAST = 2
@@ -33,16 +50,9 @@ COL_LOG_DURATION = 7
 COL_AUTH_LAST = 0
 COL_AUTH_FIRST = 1
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%H:%M:%S')
-logger = logging.getLogger("PrinterGuard")
-
 class PrinterMonitor:
     def __init__(self):
-        self.token = os.getenv("token")
-        if not self.token:
-            logger.critical("Error: $token environment variable not set.")
-            sys.exit(1)
-
+        self.token = BAMBU_ACCESS_TOKEN
         self.checked_prints = {} 
         self.printer_states = {} 
         self.clients = []
@@ -95,8 +105,6 @@ class PrinterMonitor:
 
                 if total_score < best_score:
                     best_score = total_score
-            
-            logger.info(f"   [Fuzzy] Best Match Score: {best_score} (Threshold: 3)")
             
             return best_score <= 3
 
@@ -156,8 +164,7 @@ class PrinterMonitor:
 
     def enforce_rules(self, device_id: str, client: MQTTClient):
         printer_name = PRINTER_MAP.get(device_id, "Unknown")
-        logger.info(f"[{printer_name}] CHECKING LOGS & AUTHORIZATION...")
-
+        
         log_entry = self.fetch_active_log(printer_name)
 
         if not log_entry:
@@ -208,7 +215,6 @@ class PrinterMonitor:
 
         if gcode_state == 'RUNNING' and layer_num >= 1:
             if self.checked_prints.get(device_id) != subtask_id:
-                print(f"\n[{printer_name}] TRIGGERED! Verifying print {subtask_id}...")
                 client = next((c for c in self.clients if c.device_id == device_id), None)
                 if client:
                     threading.Thread(target=self.enforce_rules, args=(device_id, client)).start()
@@ -216,14 +222,14 @@ class PrinterMonitor:
         
         if gcode_state in ['IDLE', 'FINISH', 'FAILED'] and device_id in self.checked_prints:
             del self.checked_prints[device_id]
-            logger.info(f"\n[{printer_name}] Print finished/stopped. Monitoring for next job.")
+            logger.info(f"[{printer_name}] Print finished/stopped. Monitoring for next job.")
 
     def start(self):
-        printers = [printer1, printer2]
-        logger.info(f"Starting Printer Police (Library Version) for UID: {USER_UID}")
+        printers = [PRINTER_SERIAL_1, PRINTER_SERIAL_2]
+        logger.info(f"Starting Printer Police (Library Version) for UID: {BAMBU_USER_ID}")
 
         for serial in printers:
-            client = MQTTClient(username=USER_UID, access_token=self.token, device_id=serial, on_message=self.on_message)
+            client = MQTTClient(username=BAMBU_USER_ID, access_token=self.token, device_id=serial, on_message=self.on_message)
             client.connect(blocking=False)
             time.sleep(1)
             
