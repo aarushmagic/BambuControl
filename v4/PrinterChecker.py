@@ -9,9 +9,6 @@ import logging
 import threading
 from datetime import datetime, timedelta
 from typing import Optional, List
-
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bambulab import MQTTClient
 
 printer1 = "asdfghjkl1234"
@@ -24,7 +21,6 @@ PRINTER_MAP = {
 }
 
 LOG_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/PUBLISHED_GOOGLE_SHEET_LOGS_URL&single=true&output=csv"
-
 AUTH_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/PUBLISHED_GOOGLE_SHEET_AUTH_URL&single=true&output=csv"
 
 COL_LOG_FIRST = 1
@@ -85,7 +81,7 @@ class PrinterMonitor:
             
             best_score = 999
             
-            start_idx = 1 if "LAST" in auth_rows[0][0].upper() else 0
+            start_idx = 1 if auth_rows and "LAST" in str(auth_rows[0][0]).upper() else 0
 
             for row in auth_rows[start_idx:]:
                 if len(row) < 2: continue
@@ -224,15 +220,15 @@ class PrinterMonitor:
 
     def start(self):
         printers = [printer1, printer2]
-        logger.info(f"Starting Printer Police (Fuzzy Match) for UID: {USER_UID}")
+        logger.info(f"Starting Printer Police (Library Version) for UID: {USER_UID}")
 
         for serial in printers:
             client = MQTTClient(username=USER_UID, access_token=self.token, device_id=serial, on_message=self.on_message)
             client.connect(blocking=False)
             time.sleep(1)
-            client.request_full_status()
+            
             self.clients.append(client)
-            logger.info(f"Connected to {PRINTER_MAP.get(serial, serial)}")
+            time.sleep(0.5)
 
         try:
             while True: time.sleep(1)
