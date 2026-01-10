@@ -11,14 +11,20 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 from bambulab import MQTTClient
 
-PRINTER_SERIAL_1 = os.getenv("PRINTER_SERIAL_1")
-PRINTER_SERIAL_2 = os.getenv("PRINTER_SERIAL_2")
-BAMBU_USER_ID = os.getenv("BAMBU_USER_ID")
-BAMBU_ACCESS_TOKEN = os.getenv("BAMBU_ACCESS_TOKEN")
-LOG_SHEET_URL = os.getenv("LOG_SHEET_URL")
-AUTH_SHEET_URL = os.getenv("AUTH_SHEET_URL")
+# --- Configuration & Environment Variables ---
+PRINTER_SERIAL_1 = os.getenv("PRINTER_SERIAL_1", "").strip()
+PRINTER_SERIAL_2 = os.getenv("PRINTER_SERIAL_2", "").strip()
+BAMBU_USER_ID = os.getenv("BAMBU_USER_ID", "").strip()
+BAMBU_ACCESS_TOKEN = os.getenv("BAMBU_ACCESS_TOKEN", "").strip()
+LOG_SHEET_URL = os.getenv("LOG_SHEET_URL", "").strip()
+AUTH_SHEET_URL = os.getenv("AUTH_SHEET_URL", "").strip()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%H:%M:%S')
+# Logging Setup
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - [%(levelname)s] %(message)s', 
+    datefmt='%H:%M:%S'
+)
 logger = logging.getLogger("PrinterGuard")
 
 required_vars = [
@@ -81,37 +87,31 @@ class PrinterMonitor:
 
     def is_authorized(self, log_first: str, log_last: str) -> bool:
         try:
-            response = requests.get(f"{AUTH_SHEET_URL}&t={int(time.time())}")
+            response = requests.get(f"{AUTH_SHEET_URL}&t={int(time.time())}", timeout=10)
             response.raise_for_status()
             reader = csv.reader(io.StringIO(response.text))
             auth_rows = list(reader)
 
             log_f = log_first.strip()
             log_l = log_last.strip()
-            
+
             best_score = 999
             
             start_idx = 1 if auth_rows and "LAST" in str(auth_rows[0][0]).upper() else 0
 
             for row in auth_rows[start_idx:]:
                 if len(row) < 2: continue
-                
-                auth_l = row[COL_AUTH_LAST].strip()
-                auth_f = row[COL_AUTH_FIRST].strip()
-
-                f_score = self.levenshtein(log_f, auth_f)
-                l_score = self.levenshtein(log_l, auth_l)
-                total_score = f_score + l_score
-
+                auth_l, auth_f = row[COL_AUTH_LAST].strip(), row[COL_AUTH_FIRST].strip()
+                total_score = self.levenshtein(log_f, auth_f) + self.levenshtein(log_l, auth_l)
                 if total_score < best_score:
                     best_score = total_score
             
             return best_score <= 3
-
         except Exception as e:
-            logger.error(f"   [Auth Check] Failed to fetch/parse authorized list: {e}")
+            logger.error(f"   [Auth Check] Failed to fetch auth list: {e}")
             return False
 
+    # --- LOG PARSING ---
     def parse_duration(self, duration_str: str) -> timedelta:
         try:
             parts = list(map(int, duration_str.split(':')))
@@ -123,7 +123,7 @@ class PrinterMonitor:
     def fetch_active_log(self, printer_name: str) -> Optional[List[str]]:
         try:
             url = f"{LOG_SHEET_URL}&t={int(time.time())}"
-            response = requests.get(url)
+            response = requests.get(url, timeout=10)
             response.raise_for_status()
             reader = csv.reader(io.StringIO(response.text))
             rows = list(reader)
@@ -131,7 +131,6 @@ class PrinterMonitor:
             last_entry = None
             for row in reversed(rows):
                 if len(row) <= COL_LOG_DURATION: continue
-                
                 if row[COL_LOG_PRINTER].strip() == printer_name:
                     last_entry = row
                     break
@@ -144,6 +143,7 @@ class PrinterMonitor:
                 date_str = last_entry[COL_LOG_START_DATE].strip()
                 time_str = last_entry[COL_LOG_START_TIME].strip()
                 duration_str = last_entry[COL_LOG_DURATION].strip()
+                
                 start_dt = datetime.strptime(f"{date_str} {time_str}", "%m/%d/%Y %I:%M:%S %p")
                 duration = self.parse_duration(duration_str)
                 end_dt = start_dt + duration
@@ -156,12 +156,13 @@ class PrinterMonitor:
                     logger.warning(f"  [Sheet] Expired: Ended at {end_dt.strftime('%H:%M')}")
                     return None
             except ValueError as e:
-                logger.error(f"  [Sheet] Date Error: {e}")
+                logger.error(f"  [Sheet] Date Parse Error: {e}")
                 return None
         except Exception as e:
             logger.error(f"  [Sheet] Network Error: {e}")
             return None
 
+    # --- ENFORCEMENT LOGIC ---
     def enforce_rules(self, device_id: str, client: MQTTClient):
         printer_name = PRINTER_MAP.get(device_id, "Unknown")
         
@@ -188,12 +189,7 @@ class PrinterMonitor:
     def cancel_print(self, client: MQTTClient, printer_name: str, reason: str):
         try:
             seq_id = int(time.time())
-            command = {
-                "print": {
-                    "command": "stop",
-                    "sequence_id": seq_id
-                }
-            }
+            command = {"print": {"command": "stop", "sequence_id": seq_id}}
             payload = json.dumps(command)
             client.client.publish(f"device/{client.device_id}/request", payload)
             logger.info(f"[{printer_name}] STOP COMMAND SENT (Seq: {seq_id})")
@@ -208,38 +204,63 @@ class PrinterMonitor:
         
         current_state = self.printer_states[device_id]
         gcode_state = current_state.get('gcode_state', 'UNKNOWN')
-        try: layer_num = int(current_state.get('layer_num', 0))
-        except: layer_num = 0
         subtask_id = current_state.get('subtask_id', 'unknown')
         printer_name = PRINTER_MAP.get(device_id, device_id)
+        
+        try: layer_num = int(current_state.get('layer_num', 0))
+        except: layer_num = 0
 
+        # Trigger logic only on active prints at layer 1 or higher
         if gcode_state == 'RUNNING' and layer_num >= 1:
             if self.checked_prints.get(device_id) != subtask_id:
+                logger.info(f"[{printer_name}] NEW PRINT DETECTED (ID: {subtask_id}). Verifying...")
                 client = next((c for c in self.clients if c.device_id == device_id), None)
                 if client:
                     threading.Thread(target=self.enforce_rules, args=(device_id, client)).start()
                     self.checked_prints[device_id] = subtask_id
         
+        # Reset tracker when print finishes or stops
         if gcode_state in ['IDLE', 'FINISH', 'FAILED'] and device_id in self.checked_prints:
             del self.checked_prints[device_id]
             logger.info(f"[{printer_name}] Print finished/stopped. Monitoring for next job.")
 
+    # --- MAIN LOOP (WATCHDOG) ---
     def start(self):
         printers = [PRINTER_SERIAL_1, PRINTER_SERIAL_2]
-        logger.info(f"Starting Printer Police (Library Version) for UID: {BAMBU_USER_ID}")
+        logger.info(f"Starting Printer Guard for UID: {BAMBU_USER_ID}")
 
         for serial in printers:
+            if not serial: continue
             client = MQTTClient(username=BAMBU_USER_ID, access_token=self.token, device_id=serial, on_message=self.on_message)
             client.connect(blocking=False)
-            time.sleep(1)
-            
             self.clients.append(client)
-            time.sleep(0.5)
+            logger.info(f"Connecting to {PRINTER_MAP.get(serial, serial)}...")
+            time.sleep(1)
+
+        logger.info("Startup complete. Listening for prints...")
+        
+        last_watchdog_time = 0
+        WATCHDOG_INTERVAL = 60  # seconds
 
         try:
-            while True: time.sleep(1)
+            while True:
+                current_time = time.time()
+                
+                if current_time - last_watchdog_time > WATCHDOG_INTERVAL:
+                    for client in self.clients:
+                        try:
+                            client.request_full_status()
+                        except Exception as e:
+                            logger.error(f"Watchdog failed for {client.device_id}: {e}")
+                    
+                    last_watchdog_time = current_time
+
+                time.sleep(1) 
+
         except KeyboardInterrupt:
-            for client in self.clients: client.disconnect()
+            logger.info("Stopping...")
+            for client in self.clients: 
+                client.disconnect()
 
 if __name__ == "__main__":
     monitor = PrinterMonitor()
