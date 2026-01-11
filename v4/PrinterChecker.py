@@ -19,7 +19,6 @@ BAMBU_ACCESS_TOKEN = os.getenv("BAMBU_ACCESS_TOKEN", "").strip()
 LOG_SHEET_URL = os.getenv("LOG_SHEET_URL", "").strip()
 AUTH_SHEET_URL = os.getenv("AUTH_SHEET_URL", "").strip()
 
-# Logging Setup
 logging.basicConfig(
     level=logging.INFO, 
     format='%(asctime)s - [%(levelname)s] %(message)s', 
@@ -106,7 +105,7 @@ class PrinterMonitor:
             
             return best_score <= 3
         except Exception as e:
-            logger.error(f"   [Auth Check] Failed to fetch auth list: {e}")
+            logger.error(f"[Auth Check] Failed to fetch auth list: {e}")
             return False
 
     # --- LOG PARSING ---
@@ -146,17 +145,14 @@ class PrinterMonitor:
                 end_dt = start_dt + duration
                 
                 if datetime.now() <= end_dt:
-                    user_name = f"{last_entry[COL_LOG_FIRST]} {last_entry[COL_LOG_LAST]}"
-                    logger.info(f"  [Sheet] Time Valid: {user_name} until {end_dt.strftime('%H:%M')}")
                     return last_entry
                 else:
-                    logger.warning(f"  [Sheet] Expired: Ended at {end_dt.strftime('%H:%M')}")
                     return None
             except ValueError as e:
-                logger.error(f"  [Sheet] Date Parse Error: {e}")
+                logger.error(f"[Sheet] Date Parse Error: {e}")
                 return None
         except Exception as e:
-            logger.error(f"  [Sheet] Network Error: {e}")
+            logger.error(f"[Sheet] Network Error: {e}")
             return None
 
     # --- ENFORCEMENT LOGIC ---
@@ -164,15 +160,12 @@ class PrinterMonitor:
         printer_name = PRINTER_MAP.get(device_id, "Unknown")
         
         # --- GOOGLE SHEETS LATENCY BUFFER ---
-        # Try twice over 10s to ensure we don't fail due to Google API lag
         log_entry = None
         for attempt in range(1, 3): 
             log_entry = self.fetch_active_log(printer_name)
             if log_entry:
                 break
-            
             if attempt == 1:
-                logger.warning(f"[{printer_name}] Layer 1 Verified, but log missing. Waiting 10s for Google update...")
                 time.sleep(10)
         # ------------------------------------
 
@@ -185,14 +178,11 @@ class PrinterMonitor:
         last_name = log_entry[COL_LOG_LAST]
         full_name = f"{first_name} {last_name}"
 
-        logger.info(f"   [Auth] Verifying user: {full_name}")
         is_allowed = self.is_authorized(first_name, last_name)
 
         if not is_allowed:
             logger.warning(f"[{printer_name}] 🛑 VIOLATION: Unauthorized User ({full_name}). Sending STOP.")
             self.cancel_print(client, printer_name, f"Unauthorized: {full_name}")
-        else:
-            logger.info(f"[{printer_name}] ✅ SUCCESS: Print Authorized for {full_name}.")
 
     def cancel_print(self, client: MQTTClient, printer_name: str, reason: str):
         try:
@@ -214,7 +204,6 @@ class PrinterMonitor:
         current_state = self.printer_states[device_id]
         gcode_state = current_state.get('gcode_state', 'UNKNOWN')
         subtask_id = current_state.get('subtask_id', 'unknown')
-        printer_name = PRINTER_MAP.get(device_id, device_id)
         
         try: layer_num = int(current_state.get('layer_num', 0))
         except: layer_num = 0
@@ -224,7 +213,6 @@ class PrinterMonitor:
         if gcode_state == 'RUNNING' and layer_num >= 1:
             if device_id not in self.layer_verification_timers:
                 self.layer_verification_timers[device_id] = time.time()
-                # logger.info(f"[{printer_name}] Layer {layer_num} reported. Starting {self.VERIFICATION_DELAY}s truth timer...")
             
             # 2. Only proceed if the timer has exceeded the delay (proving it's real)
             elapsed = time.time() - self.layer_verification_timers[device_id]
@@ -232,7 +220,6 @@ class PrinterMonitor:
             if elapsed > self.VERIFICATION_DELAY:
                 # Timer passed! It's real.
                 if self.checked_prints.get(device_id) != subtask_id:
-                    logger.info(f"[{printer_name}] CONFIRMED: Print {subtask_id} is genuinely at Layer {layer_num}. Verifying...")
                     client = next((c for c in self.clients if c.device_id == device_id), None)
                     if client:
                         threading.Thread(target=self.enforce_rules, args=(device_id, client)).start()
@@ -241,16 +228,13 @@ class PrinterMonitor:
         else:
             # If layer drops to 0 (calibration/reset), cancel the timer immediately.
             if device_id in self.layer_verification_timers:
-                # logger.info(f"[{printer_name}] Layer reset to {layer_num}. Timer cancelled (was false alarm).")
                 del self.layer_verification_timers[device_id]
 
         # Reset tracker when print finishes or stops
         if gcode_state in ['IDLE', 'FINISH', 'FAILED']:
             if device_id in self.checked_prints:
                 del self.checked_prints[device_id]
-                logger.info(f"[{printer_name}] Print finished/stopped. Monitoring for next job.")
             
-            # Ensure timer is clear
             if device_id in self.layer_verification_timers:
                 del self.layer_verification_timers[device_id]
 
@@ -264,7 +248,6 @@ class PrinterMonitor:
             client = MQTTClient(username=BAMBU_USER_ID, access_token=self.token, device_id=serial, on_message=self.on_message)
             client.connect(blocking=False)
             self.clients.append(client)
-            logger.info(f"Connecting to {PRINTER_MAP.get(serial, serial)}...")
             time.sleep(1)
 
         logger.info("Startup complete. Listening for prints...")
