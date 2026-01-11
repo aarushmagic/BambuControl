@@ -1,0 +1,2 @@
+bambu-lab-cloud-api
+requests

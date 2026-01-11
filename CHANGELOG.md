@@ -4,6 +4,20 @@ All notable changes to **BambuControl** are documented in this file.
 
 ---
 
+## v4 – Hardware Enforcement & Unified Structure
+
+### Added
+- **Hardware Enforcement (Python):** Introduced `PrinterChecker.py`, a local agent that monitors printers via MQTT.
+- **Remote Kill Command:** The system can now actively cancel unauthorized or unlogged prints by sending a "stop" command to the printer.
+- **Ghost Layer Protection:** Added logic to ignore calibration and bed leveling by verifying the print has sustained "Layer 1" for 15 seconds before checking authorization.
+- **Unified File Structure:** Reorganized project into a `src/` directory containing both `google_apps_script` (Cloud) and `printer_guard` (Local) components.
+
+### Changed
+- **Architecture:** Transitioned from a purely logging/email-based system to a hybrid Cloud + Local enforcement system.
+- **Documentation:** Consolidated version-specific READMEs into a single master `README.md`.
+
+---
+
 ## v3 – Fuzzy Matching & Typos Tolerance
 
 ### Added
@@ -34,14 +48,8 @@ All notable changes to **BambuControl** are documented in this file.
 - Email logic consolidated into a single scan of the print log.
 
 ### Security
-- Introduced out-of-band verification via institute email to mitigate
-  name-based impersonation of authorized users.
+- Introduced out-of-band verification via institute email to mitigate name-based impersonation of authorized users.
 - Enables rapid detection and cancellation of fraudulent prints.
-
-### Notes
-- No spreadsheet schema changes required.
-- Existing v1 deployments can be upgraded by replacing the script and
-  adding the new email template.
 
 ---
 
@@ -49,8 +57,7 @@ All notable changes to **BambuControl** are documented in this file.
 
 ### Added
 - Google Apps Script–based authorization system for Bambu Lab printers.
-- Custom spreadsheet function for matching print submissions against
-  an authorized users list.
+- Custom spreadsheet function for matching print submissions against an authorized users list.
 - Automated email alerts to administrators for unauthorized print jobs.
 - Locking mechanism to prevent duplicate email notifications.
 
@@ -58,5 +65,3 @@ All notable changes to **BambuControl** are documented in this file.
 - Authorization based solely on exact first and last name matching.
 - No student-facing notifications.
 - No real-time prevention of impersonation.
-
----
