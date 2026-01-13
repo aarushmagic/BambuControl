@@ -25,6 +25,7 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 logger = logging.getLogger("PrinterGuard")
+logging.getLogger("bambulab").setLevel(logging.WARNING)
 
 # Validation
 required_vars = [
@@ -66,7 +67,7 @@ class PrinterMonitor:
         
         # Store the timestamp when we first saw Layer 1
         self.layer_verification_timers = {} 
-        self.VERIFICATION_DELAY = 15 # Seconds to wait to confirm Layer 1 is real
+        self.VERIFICATION_DELAY = 7 # Seconds to wait to confirm Layer 1 is real
 
     # --- FUZZY MATCHING ---
     def levenshtein(self, a: str, b: str) -> int:
