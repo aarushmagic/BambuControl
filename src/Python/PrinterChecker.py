@@ -162,12 +162,14 @@ class PrinterMonitor:
         
         # --- GOOGLE SHEETS LATENCY BUFFER ---
         log_entry = None
-        for attempt in range(1, 3): 
+        for attempt in range(1, 4): 
             log_entry = self.fetch_active_log(printer_name)
             if log_entry:
                 break
             if attempt == 1:
-                time.sleep(10)
+                time.sleep(3)
+            elif attempt == 2:
+                time.sleep(7)
         # ------------------------------------
 
         if not log_entry:
@@ -254,7 +256,7 @@ class PrinterMonitor:
         logger.info("Startup complete. Listening for prints...")
         
         last_watchdog_time = 0
-        WATCHDOG_INTERVAL = 60 
+        WATCHDOG_INTERVAL = 300 
 
         try:
             while True:

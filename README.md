@@ -115,6 +115,8 @@ The local Python script needs to read the Logs to verify prints.
 
 The `PrinterChecker.py` script runs on a local device (e.g., Raspberry Pi, PC) that is always on and connected to the internet.
 
+*Note: This software has been tested on Bambu X1Cs running firmware version 01.08.02.00*
+
 ### 1. Prerequisites
 
 * Python 3.9+
