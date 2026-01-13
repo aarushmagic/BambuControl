@@ -121,6 +121,7 @@ The `PrinterChecker.py` script runs on a local device (e.g., Raspberry Pi, PC) t
 * Bambu Lab Account (User ID and Access Token)
     * More information: https://github.com/coelacant1/Bambu-Lab-Cloud-API
 * Printer Serial Numbers
+    *Note: This software has been tested on Bambu X1Cs running version 01.08.02.00*
 
 ### 2. Installation
 
