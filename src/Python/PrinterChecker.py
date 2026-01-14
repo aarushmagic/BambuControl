@@ -18,6 +18,8 @@ BAMBU_USER_ID = os.getenv("BAMBU_USER_ID", "").strip()
 BAMBU_ACCESS_TOKEN = os.getenv("BAMBU_ACCESS_TOKEN", "").strip()
 LOG_SHEET_URL = os.getenv("LOG_SHEET_URL", "").strip()
 AUTH_SHEET_URL = os.getenv("AUTH_SHEET_URL", "").strip()
+PRINTER_NAME_1 = os.getenv("PRINTER_NAME_1", "").strip()
+PRINTER_NAME_2 = os.getenv("PRINTER_NAME_2", "").strip()
 
 logging.basicConfig(
     level=logging.INFO, 
@@ -34,7 +36,9 @@ required_vars = [
     ("BAMBU_USER_ID", BAMBU_USER_ID),
     ("BAMBU_ACCESS_TOKEN", BAMBU_ACCESS_TOKEN),
     ("LOG_SHEET_URL", LOG_SHEET_URL),
-    ("AUTH_SHEET_URL", AUTH_SHEET_URL)
+    ("AUTH_SHEET_URL", AUTH_SHEET_URL),
+    ("PRINTER_NAME_1", PRINTER_NAME_1),
+    ("PRINTER_NAME_2", PRINTER_NAME_2)
 ]
 
 missing_vars = [name for name, val in required_vars if not val]
@@ -43,8 +47,8 @@ if missing_vars:
     sys.exit(1)
 
 PRINTER_MAP = {
-    PRINTER_SERIAL_1: "Printer 1",
-    PRINTER_SERIAL_2: "Printer 2"
+    PRINTER_SERIAL_1: PRINTER_NAME_1,
+    PRINTER_SERIAL_2: PRINTER_NAME_2
 }
 
 # Column Indices

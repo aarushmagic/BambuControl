@@ -76,8 +76,8 @@ Receives data from a linked Google Form.
 | --- | --- | --- |
 | A | Timestamp | Form Response |
 | B | First Name | Form Response |
-| C | Institute Email | `=FUZZYMATCH(B2, D2, 'Authorized Users'!B2:B, 'Authorized Users'!A2:A, 'Authorized Users'!C2:C)` |
-| D | Last Name | Form Response |
+| C | Last Name | Form Response |
+| D | Institute Email | `=FUZZYMATCH(B2, C2, 'Authorized Users'!B2:B, 'Authorized Users'!A2:A, 'Authorized Users'!C2:C)` |
 | E | Printer Name | Form Response |
 | F | Start Date | `=DATE(YEAR(A2), MONTH(A2), DAY(A2))` |
 | G | Start Time | `=TIME(HOUR(A2), MINUTE(A2), SECOND(A2))` |
@@ -145,6 +145,8 @@ Set the following Environment Variables. You can do this via a `.env` file or sy
 ```bash
 export PRINTER_SERIAL_1="00M00A123456789"
 export PRINTER_SERIAL_2="00M00A987654321"
+export PRINTER_NAME_1="Printer 1" #Must match printer name in google sheet
+export PRINTER_NAME_2="Printer 2" #Must match printer name in google sheet
 export BAMBU_USER_ID="12345678"
 export BAMBU_ACCESS_TOKEN="your_access_token_here"
 export LOG_SHEET_URL="https://docs.google.com/.../pub?gid=0&single=true&output=csv"
