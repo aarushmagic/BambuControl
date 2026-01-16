@@ -7,6 +7,7 @@ import json
 import requests
 import logging
 import threading
+import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, List
 from bambulab import MQTTClient
@@ -27,7 +28,7 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 logger = logging.getLogger("PrinterGuard")
-logging.getLogger("bambulab").setLevel(logging.WARNING)
+logging.getLogger("bambulab").setLevel(logging.ERROR)
 
 # Validation
 required_vars = [
@@ -72,6 +73,7 @@ class PrinterMonitor:
         # Store the timestamp when we first saw Layer 1
         self.layer_verification_timers = {} 
         self.VERIFICATION_DELAY = 7 # Seconds to wait to confirm Layer 1 is real
+        self.used_log_hashes = {}
 
     # --- FUZZY MATCHING ---
     def levenshtein(self, a: str, b: str) -> int:
@@ -161,7 +163,7 @@ class PrinterMonitor:
             return None
 
     # --- ENFORCEMENT LOGIC ---
-    def enforce_rules(self, device_id: str, client: MQTTClient):
+    def enforce_rules(self, device_id: str, client: MQTTClient, subtask_id: str):
         printer_name = PRINTER_MAP.get(device_id, "Unknown")
         
         # --- GOOGLE SHEETS LATENCY BUFFER ---
@@ -180,6 +182,35 @@ class PrinterMonitor:
             logger.warning(f"[{printer_name}] 🛑 VIOLATION: Unlogged/Expired Print. Sending STOP.")
             self.cancel_print(client, printer_name, "Unlogged")
             return
+
+        try:
+            date_str = log_entry[COL_LOG_START_DATE].strip()
+            time_str = log_entry[COL_LOG_START_TIME].strip()
+            duration_str = log_entry[COL_LOG_DURATION].strip()
+            
+            start_dt = datetime.strptime(f"{date_str} {time_str}", "%m/%d/%Y %I:%M:%S %p")
+            duration = self.parse_duration(duration_str)
+            end_dt = start_dt + duration
+        except Exception as e:
+            logger.warning(f"[{printer_name}] Date Parse Failed ({e}). Defaulting expiration to +24h.")
+            end_dt = datetime.now() + timedelta(hours=24)
+
+        try:
+            stable_data = f"{log_entry[0]}|{log_entry[1]}|{log_entry[2]}|{log_entry[4]}"
+            if len(log_entry) > 9:
+                stable_data += f"|{log_entry[9]}"
+        except IndexError:
+            stable_data = str(log_entry[:3]) 
+
+        log_signature = hashlib.sha256(stable_data.encode()).hexdigest()
+
+        if log_signature in self.used_log_hashes:
+            stored_id, _ = self.used_log_hashes[log_signature]
+            if stored_id != subtask_id:
+                logger.warning(f"[{printer_name}] 🛑 VIOLATION: Log Reuse Detected. Log already used by Job {stored_id}. Sending STOP.")
+                self.cancel_print(client, printer_name, "Log Entry Reused")
+                return
+        self.used_log_hashes[log_signature] = (subtask_id, end_dt)
 
         first_name = log_entry[COL_LOG_FIRST]
         last_name = log_entry[COL_LOG_LAST]
@@ -216,12 +247,10 @@ class PrinterMonitor:
         except: layer_num = 0
 
         # --- "GHOST LAYER" PROTECTION ---
-        # 1. If we are running and appear to be at Layer 1+, start a timer.
         if gcode_state == 'RUNNING' and layer_num >= 1:
             if device_id not in self.layer_verification_timers:
                 self.layer_verification_timers[device_id] = time.time()
             
-            # 2. Only proceed if the timer has exceeded the delay (proving it's real)
             elapsed = time.time() - self.layer_verification_timers[device_id]
             
             if elapsed > self.VERIFICATION_DELAY:
@@ -229,21 +258,32 @@ class PrinterMonitor:
                 if self.checked_prints.get(device_id) != subtask_id:
                     client = next((c for c in self.clients if c.device_id == device_id), None)
                     if client:
-                        threading.Thread(target=self.enforce_rules, args=(device_id, client)).start()
+                        threading.Thread(target=self.enforce_rules, args=(device_id, client, subtask_id)).start()
                         self.checked_prints[device_id] = subtask_id
         
         else:
-            # If layer drops to 0 (calibration/reset), cancel the timer immediately.
             if device_id in self.layer_verification_timers:
                 del self.layer_verification_timers[device_id]
 
-        # Reset tracker when print finishes or stops
         if gcode_state in ['IDLE', 'FINISH', 'FAILED']:
             if device_id in self.checked_prints:
                 del self.checked_prints[device_id]
             
             if device_id in self.layer_verification_timers:
                 del self.layer_verification_timers[device_id]
+
+    def prune_hashes(self):
+        now = datetime.now()
+        expired_keys = [
+            key for key, (uid, expires_at) in self.used_log_hashes.items() 
+            if now > expires_at
+        ]
+        
+        for key in expired_keys:
+            del self.used_log_hashes[key]
+            
+        if expired_keys:
+            logger.info(f"[Memory] Pruned {len(expired_keys)} expired log entries.")
 
     # --- MAIN LOOP (WATCHDOG) ---
     def start(self):
@@ -260,7 +300,7 @@ class PrinterMonitor:
         logger.info("Startup complete. Listening for prints...")
         
         last_watchdog_time = 0
-        WATCHDOG_INTERVAL = 300 
+        WATCHDOG_INTERVAL = 60 
 
         try:
             while True:
@@ -272,7 +312,8 @@ class PrinterMonitor:
                             client.request_full_status()
                         except Exception as e:
                             logger.error(f"Watchdog failed for {client.device_id}: {e}")
-                    
+
+                    self.prune_hashes()
                     last_watchdog_time = current_time
 
                 time.sleep(1) 
