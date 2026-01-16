@@ -164,7 +164,7 @@ The script will now:
 1. Connect to both printers via MQTT.
 2. Monitor for active print jobs (Layer > 1).
 3. Cross-reference the `LOG_SHEET_URL` to see if the current time falls within a valid print window for that printer.
-4. Kill the print if no valid log is found or if the user is unauthorized.
+4. Kill the print if no valid log is found, if the user is unauthorized or the print is over 12.5 hours.
     * The script hashes each log entry to make sure each log entry is associated with 1 print and any subsequent prints need to be relogged.
 
 ---

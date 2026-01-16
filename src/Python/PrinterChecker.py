@@ -22,6 +22,14 @@ AUTH_SHEET_URL = os.getenv("AUTH_SHEET_URL", "").strip()
 PRINTER_NAME_1 = os.getenv("PRINTER_NAME_1", "").strip()
 PRINTER_NAME_2 = os.getenv("PRINTER_NAME_2", "").strip()
 
+# --- Exempt Users Table ---
+# Users in this list are allowed to print longer than 12h 30m.
+# Format: {"first": "Firstname", "last": "Lastname"} (Case insensitive)
+EXEMPT_USERS = [
+    {"first": "George", "last": "Burdell"},
+    {"first": "John", "last": "Doe"},
+]
+
 logging.basicConfig(
     level=logging.INFO, 
     format='%(asctime)s - [%(levelname)s] %(message)s', 
@@ -70,12 +78,10 @@ class PrinterMonitor:
         self.printer_states = {} 
         self.clients = []
         
-        # Store the timestamp when we first saw Layer 1
         self.layer_verification_timers = {} 
-        self.VERIFICATION_DELAY = 7 # Seconds to wait to confirm Layer 1 is real
+        self.VERIFICATION_DELAY = 7
         self.used_log_hashes = {}
 
-    # --- FUZZY MATCHING ---
     def levenshtein(self, a: str, b: str) -> int:
         if not a: return len(b)
         if not b: return len(a)
@@ -90,7 +96,6 @@ class PrinterMonitor:
                     matrix[i][j] = min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1)
         return matrix[len(b)][len(a)]
 
-    # --- AUTHORIZATION CHECK ---
     def is_authorized(self, log_first: str, log_last: str) -> bool:
         try:
             response = requests.get(f"{AUTH_SHEET_URL}&t={int(time.time())}", timeout=10)
@@ -221,6 +226,28 @@ class PrinterMonitor:
         if not is_allowed:
             logger.warning(f"[{printer_name}] 🛑 VIOLATION: Unauthorized User ({full_name}). Sending STOP.")
             self.cancel_print(client, printer_name, f"Unauthorized: {full_name}")
+            return
+        
+        MAX_DURATION_MIN = 750
+        
+        current_state = self.printer_states.get(device_id, {})
+        remaining_min = int(current_state.get('mc_remaining_time', 0))
+
+        if remaining_min > MAX_DURATION_MIN:
+            is_exempt = False
+            log_f_norm = first_name.strip().lower()
+            log_l_norm = last_name.strip().lower()
+            
+            for user in EXEMPT_USERS:
+                if (user["first"].strip().lower() == log_f_norm and 
+                    user["last"].strip().lower() == log_l_norm):
+                    is_exempt = True
+                    break
+            
+            if not is_exempt:
+                logger.warning(f"[{printer_name}] 🛑 VIOLATION: Time Limit Exceeded ({remaining_min}m > {MAX_DURATION_MIN}m) by {full_name}. STOP.")
+                self.cancel_print(client, printer_name, f"Time Limit: {remaining_min}m > 12.5h")
+                return
 
     def cancel_print(self, client: MQTTClient, printer_name: str, reason: str):
         try:
