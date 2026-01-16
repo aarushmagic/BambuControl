@@ -335,10 +335,14 @@ class PrinterMonitor:
                 
                 if current_time - last_watchdog_time > WATCHDOG_INTERVAL:
                     for client in self.clients:
-                        try:
-                            client.request_full_status()
-                        except Exception as e:
-                            logger.error(f"Watchdog failed for {client.device_id}: {e}")
+                        if client.connected:
+                            try:
+                                client.request_full_status()
+                            except Exception as e:
+                                logger.error(f"Watchdog failed for {client.device_id}: {e}")
+                        else:
+                            # Log a softer message instead of crashing/erroring
+                            logger.warning(f"Watchdog skipped for {client.device_id}: Temporarily Disconnected")
 
                     self.prune_hashes()
                     last_watchdog_time = current_time
