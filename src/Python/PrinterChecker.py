@@ -23,8 +23,6 @@ PRINTER_NAME_1 = os.getenv("PRINTER_NAME_1", "").strip()
 PRINTER_NAME_2 = os.getenv("PRINTER_NAME_2", "").strip()
 
 # --- Exempt Users Table ---
-# Users in this list are allowed to print longer than 12h 30m.
-# Format: {"first": "Firstname", "last": "Lastname"} (Case insensitive)
 EXEMPT_USERS = [
     {"first": "George", "last": "Burdell"},
     {"first": "John", "last": "Doe"},
@@ -171,7 +169,7 @@ class PrinterMonitor:
     def enforce_rules(self, device_id: str, client: MQTTClient, subtask_id: str):
         printer_name = PRINTER_MAP.get(device_id, "Unknown")
         
-        # --- GOOGLE SHEETS LATENCY BUFFER ---
+        # --- 1. FETCH LOG ---
         log_entry = None
         for attempt in range(1, 4): 
             log_entry = self.fetch_active_log(printer_name)
@@ -181,7 +179,6 @@ class PrinterMonitor:
                 time.sleep(3)
             elif attempt == 2:
                 time.sleep(7)
-        # ------------------------------------
 
         if not log_entry:
             logger.warning(f"[{printer_name}] 🛑 VIOLATION: Unlogged/Expired Print. Sending STOP.")
@@ -221,6 +218,12 @@ class PrinterMonitor:
         last_name = log_entry[COL_LOG_LAST]
         full_name = f"{first_name} {last_name}"
 
+        log_f_norm = first_name.strip().lower()
+        log_l_norm = last_name.strip().lower()
+
+        if device_id in self.checked_prints:
+            self.checked_prints[device_id]['user'] = f"{log_f_norm}|{log_l_norm}"
+
         is_allowed = self.is_authorized(first_name, last_name)
 
         if not is_allowed:
@@ -228,26 +231,39 @@ class PrinterMonitor:
             self.cancel_print(client, printer_name, f"Unauthorized: {full_name}")
             return
         
-        MAX_DURATION_MIN = 750
-        
-        current_state = self.printer_states.get(device_id, {})
-        remaining_min = int(current_state.get('mc_remaining_time', 0))
+        is_exempt = False
+        for user in EXEMPT_USERS:
+            if (user["first"].strip().lower() == log_f_norm and 
+                user["last"].strip().lower() == log_l_norm):
+                is_exempt = True
+                break
 
-        if remaining_min > MAX_DURATION_MIN:
-            is_exempt = False
-            log_f_norm = first_name.strip().lower()
-            log_l_norm = last_name.strip().lower()
-            
-            for user in EXEMPT_USERS:
-                if (user["first"].strip().lower() == log_f_norm and 
-                    user["last"].strip().lower() == log_l_norm):
-                    is_exempt = True
-                    break
-            
-            if not is_exempt:
+        if not is_exempt:
+            MAX_DURATION_MIN = 750
+            current_state = self.printer_states.get(device_id, {})
+            remaining_min = int(current_state.get('mc_remaining_time', 0))
+
+            if remaining_min > MAX_DURATION_MIN:
                 logger.warning(f"[{printer_name}] 🛑 VIOLATION: Time Limit Exceeded ({remaining_min}m > {MAX_DURATION_MIN}m) by {full_name}. STOP.")
                 self.cancel_print(client, printer_name, f"Time Limit: {remaining_min}m > 12.5h")
                 return
+
+        if not is_exempt:
+            current_user_key = f"{log_f_norm}|{log_l_norm}"
+            
+            for other_serial, other_data in self.checked_prints.items():
+                if other_serial == device_id: continue
+                
+                other_state = self.printer_states.get(other_serial, {})
+                if other_state.get('gcode_state') != 'RUNNING':
+                    continue
+
+                other_user_key = other_data.get('user')
+                if other_user_key == current_user_key:
+                    other_name_display = PRINTER_MAP.get(other_serial, "Other Printer")
+                    logger.warning(f"[{printer_name}] 🛑 VIOLATION: Concurrent Printing. User {full_name} is already active on {other_name_display}. STOP.")
+                    self.cancel_print(client, printer_name, f"Concurrent: {other_name_display}")
+                    return
 
     def cancel_print(self, client: MQTTClient, printer_name: str, reason: str):
         try:
@@ -273,7 +289,6 @@ class PrinterMonitor:
         try: layer_num = int(current_state.get('layer_num', 0))
         except: layer_num = 0
 
-        # --- "GHOST LAYER" PROTECTION ---
         if gcode_state == 'RUNNING' and layer_num >= 1:
             if device_id not in self.layer_verification_timers:
                 self.layer_verification_timers[device_id] = time.time()
@@ -281,13 +296,14 @@ class PrinterMonitor:
             elapsed = time.time() - self.layer_verification_timers[device_id]
             
             if elapsed > self.VERIFICATION_DELAY:
-                # Timer passed! It's real.
-                if self.checked_prints.get(device_id) != subtask_id:
+                current_checked = self.checked_prints.get(device_id, {})
+                last_id = current_checked.get("id")
+                
+                if last_id != subtask_id:
                     client = next((c for c in self.clients if c.device_id == device_id), None)
                     if client:
+                        self.checked_prints[device_id] = {"id": subtask_id, "user": None}
                         threading.Thread(target=self.enforce_rules, args=(device_id, client, subtask_id)).start()
-                        self.checked_prints[device_id] = subtask_id
-        
         else:
             if device_id in self.layer_verification_timers:
                 del self.layer_verification_timers[device_id]
@@ -295,7 +311,6 @@ class PrinterMonitor:
         if gcode_state in ['IDLE', 'FINISH', 'FAILED']:
             if device_id in self.checked_prints:
                 del self.checked_prints[device_id]
-            
             if device_id in self.layer_verification_timers:
                 del self.layer_verification_timers[device_id]
 
@@ -305,10 +320,8 @@ class PrinterMonitor:
             key for key, (uid, expires_at) in self.used_log_hashes.items() 
             if now > expires_at
         ]
-        
         for key in expired_keys:
             del self.used_log_hashes[key]
-            
         if expired_keys:
             logger.info(f"[Memory] Pruned {len(expired_keys)} expired log entries.")
 
@@ -341,7 +354,6 @@ class PrinterMonitor:
                             except Exception as e:
                                 logger.error(f"Watchdog failed for {client.device_id}: {e}")
                         else:
-                            # Log a softer message instead of crashing/erroring
                             logger.warning(f"Watchdog skipped for {client.device_id}: Temporarily Disconnected")
 
                     self.prune_hashes()

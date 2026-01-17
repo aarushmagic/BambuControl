@@ -31,10 +31,13 @@ To prevent unauthorized users from submitting logs under an authorized student's
 * **Verification Email:** Every authorized print triggers an immediate email to the student's official institute address.
 * **Action:** If the student did not start the print, they are instructed to reply immediately. This allows staff to cancel fraudulent prints and investigate misuse.
 
-### 3. Hardware Enforcement
-* **Active Monitoring:** The local Python script subscribes to the printer's MQTT feed.
-* **Ghost Layer Protection:** The system waits until the printer reaches **Layer 1** and sustains it for 15 seconds before checking authorization. This prevents false alarms during calibration or bed leveling.
-* **Remote Kill:** If a print is deemed unauthorized (or unlogged), the script sends a JSON payload to the printer to cancel the job immediately.
+### 4. Usage Limits & Fair Play Enforcement
+To ensure fair access to shared resources, the system enforces the following rules at the start of every print (Layer 1):
+
+* **Time Limit:** Prints exceeding **12.5 hours** are automatically cancelled.
+* **Concurrent Printing:** Non-exempt users are restricted to **one active printer** at a time. If a user tries to start a second print while their first is still physically running, the second job is cancelled.
+* **One Log = One Print:** Log entries are hashed and "claimed" by a specific print job. Users cannot reuse a single log entry for multiple prints, even if the time window is still valid.
+* **Exemptions:** A hardcoded `EXEMPT_USERS` list allows specific administrators (case-insensitive) to bypass time limits and concurrent printing checks.
 
 ---
 
@@ -153,8 +156,19 @@ export LOG_SHEET_URL="https://docs.google.com/.../pub?gid=0&single=true&output=c
 export AUTH_SHEET_URL="https://docs.google.com/.../pub?gid=123&single=true&output=csv"
 ```
 
-### 4. Running the Guard
+**Exempt Users Configuration:**
 
+To allow specific users (e.g., admins, professors) to bypass the 12.5-hour limit and concurrent printing checks, edit the `EXEMPT_USERS` list directly in `src/Python/PrinterChecker.py`:
+
+```python
+EXEMPT_USERS = [
+    {"first": "George", "last": "Burdell"},
+    {"first": "Jane", "last": "Doe"},
+]
+```
+
+### 4. Running the Guard
+For production, the script should run in the background so it survives SSH disconnects. This can be done using `nohup` or `tmux`
 ```bash
 python src/Python/PrinterChecker.py
 ```
@@ -164,7 +178,7 @@ The script will now:
 1. Connect to both printers via MQTT.
 2. Monitor for active print jobs (Layer > 1).
 3. Cross-reference the `LOG_SHEET_URL` to see if the current time falls within a valid print window for that printer.
-4. Kill the print if no valid log is found, if the user is unauthorized or the print is over 12.5 hours.
+4. Kill the print if no valid log is found, if the user is unauthorized, the print is over 12.5 hours or a user is printing on more than 1 printers concurrently.
     * The script hashes each log entry to make sure each log entry is associated with 1 print and any subsequent prints need to be relogged.
 
 ---
