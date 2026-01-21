@@ -182,8 +182,15 @@ function doPost(e) {
     const params = JSON.parse(e.postData.contents);
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     let sheet = ss.getSheetByName("Activity");
-
-    sheet.appendRow([
+    sheet.insertRowAfter(1);
+    if (sheet.getLastRow() > 2) {
+      sheet.getRange("A3:G3").copyFormatToRange(sheet, 1, 7, 2, 2);
+    } else {
+      sheet.getRange("A2:G2")
+           .setFontWeight("normal")
+           .setBackground(null);
+    }
+    sheet.getRange(2, 1, 1, 7).setValues([[
       params.timestamp, 
       params.printer, 
       params.user, 
@@ -191,7 +198,7 @@ function doPost(e) {
       params.action, 
       params.action_success,
       params.reason
-    ]);
+    ]]);
     
     return ContentService.createTextOutput(JSON.stringify({result: 'success'}));
     

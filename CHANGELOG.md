@@ -4,6 +4,24 @@ All notable changes to **BambuControl** are documented in this file.
 
 ---
 
+## v5 – Cloud Logging & Reporting
+
+### Added
+- **Google Sheets Activity Logging:** The Python enforcer now sends real-time logs to a new "Activity" tab in the Google Sheet.
+- **Web App Endpoint:** Added `doPost` function to `code.gs` to act as a webhook receiver for the local Python script.
+- **Status Reporting:** Logs now include:
+  - Print Duration (formatted as HH:MM).
+  - Enforcement Action (Passed/Stopped).
+  - Action Success (True/False verification that the printer actually stopped).
+  - Reason for action (e.g., "Time Limit Exceeded", "Unlogged").
+- **Reverse Chronological Sorting:** The Activity sheet automatically inserts new rows at the top (Row 2) and inherits formatting from the row below (Row 3).
+
+### Changed
+- **Environment Variables:** Added `ACTIVITY_WEBHOOK` requirement for the Python script.
+- **Enforcement Logic:** Refactored `enforce_rules` to perform the stop command *before* logging to ensure the success status is accurate.
+
+---
+
 ## v4 – Hardware Enforcement & Unified Structure
 
 ### Added

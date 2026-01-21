@@ -31,13 +31,18 @@ To prevent unauthorized users from submitting logs under an authorized student's
 * **Verification Email:** Every authorized print triggers an immediate email to the student's official institute address.
 * **Action:** If the student did not start the print, they are instructed to reply immediately. This allows staff to cancel fraudulent prints and investigate misuse.
 
-### 4. Usage Limits & Fair Play Enforcement
+### 3. Usage Limits & Fair Play Enforcement
 To ensure fair access to shared resources, the system enforces the following rules at the start of every print (Layer 1):
 
 * **Time Limit:** Prints exceeding **12.5 hours** are automatically cancelled.
 * **Concurrent Printing:** Non-exempt users are restricted to **one active printer** at a time. If a user tries to start a second print while their first is still physically running, the second job is cancelled.
 * **One Log = One Print:** Log entries are hashed and "claimed" by a specific print job. Users cannot reuse a single log entry for multiple prints, even if the time window is still valid.
 * **Exemptions:** A hardcoded `EXEMPT_USERS` list allows specific administrators (case-insensitive) to bypass time limits and concurrent printing checks.
+
+### 4. Cloud Activity Logging
+The local enforcement script pushes real-time event data back to a Google Sheet tab named "Activity".
+* **Data Logged:** Timestamp, Printer Name, User, Remaining Print Time, Action Taken (Passed/Stopped), and Reason.
+* **Format:** Newest entries appear at the top for easy monitoring by administrators.
 
 ---
 
@@ -47,7 +52,7 @@ To ensure fair access to shared resources, the system enforces the following rul
 /
 ├── src/
 │   ├── Google Apps Script/
-│   │   ├── code.gs           # Main logic (Fuzzy Match + Emails)
+│   │   ├── code.gs           # Main logic (Fuzzy Match, Emails, Webhook)
 │   │   ├── NoEmail.html      # Template: Alert to admins
 │   │   └── StartEmail.html   # Template: Confirmation to students
 │   └── Python/
@@ -91,6 +96,10 @@ Receives data from a linked Google Form.
 
 *[Note: Adjust column references in formulas based on your exact layout]*.
 
+Sheet 3: Activity This sheet will be populated automatically by the Python script.
+* Create headers in Row 1: `Date/Time`, `Printer Name`, `User`, `Print Time`, `Action`, `Action Success`, `Reason`.
+* Important: Format Row 3 exactly how you want your data to look (font, size, alignment). The script will copy the style of Row 3 to all new entries inserted at Row 2.
+
 ### 2. Apps Script Installation
 
 1. Open the Sheet, go to **Extensions > Apps Script**.
@@ -101,9 +110,13 @@ Receives data from a linked Google Form.
 * Go to **Triggers** (alarm clock icon).
 * Add Trigger: `sendEmail` | Head | On form submit.
 
+### 3. Set Trigger (For Emails)
+
+1. Go to Triggers (alarm clock icon).
+2. Add Trigger: `sendEmail` | Head | On form submit.
 
 
-### 3. Publish for Python Access
+### 4. Publish CSV for Python Access
 
 The local Python script needs to read the Logs to verify prints.
 
@@ -111,6 +124,18 @@ The local Python script needs to read the Logs to verify prints.
 2. Select "Logs" -> "Comma-separated values (.csv)". Copy the URL.
 3. Select "Authorized Users" -> "Comma-separated values (.csv)". Copy the URL.
 4. Save these URLs for Part 2.
+
+### 5. Deploy Web App (For Python Access)
+
+To allow the Python script to write to the "Activity" sheet:
+
+1. Click Deploy > New Deployment.
+2. Select Web app.
+3. Description: "Violation Logger".
+4. Execute as: Me (your email).
+5. Who has access: Anyone. (This is required for the Python script to POST data without OAuth).
+6. Click Deploy.
+7. Copy the Web App URL. You will need this for Part 2.
 
 ---
 
@@ -154,6 +179,7 @@ export BAMBU_USER_ID="12345678"
 export BAMBU_ACCESS_TOKEN="your_access_token_here"
 export LOG_SHEET_URL="https://docs.google.com/.../pub?gid=0&single=true&output=csv"
 export AUTH_SHEET_URL="https://docs.google.com/.../pub?gid=123&single=true&output=csv"
+export ACTIVITY_WEBHOOK="https://script.google.com/macros/s/.../exec](https://script.google.com/macros/s/.../exec" # From Part 1, Step 5
 ```
 
 **Exempt Users Configuration:**
