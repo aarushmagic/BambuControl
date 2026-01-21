@@ -261,7 +261,7 @@ class PrinterMonitor:
                 other_user_key = other_data.get('user')
                 if other_user_key == current_user_key:
                     other_name_display = PRINTER_MAP.get(other_serial, "Other Printer")
-                    logger.warning(f"[{printer_name}] 🛑 VIOLATION: Concurrent Printing. User {full_name} is already active on {other_name_display}. STOP.")
+                    logger.warning(f"[{printer_name}] 🛑 VIOLATION: Concurrent Printing. User {full_name} is already active on {other_name_display}.")
                     self.cancel_print(client, printer_name, f"Concurrent: {other_name_display}")
                     return
 
@@ -271,9 +271,16 @@ class PrinterMonitor:
             command = {"print": {"command": "stop", "sequence_id": seq_id}}
             payload = json.dumps(command)
             client.client.publish(f"device/{client.device_id}/request", payload)
-            logger.info(f"[{printer_name}] STOP COMMAND SENT (Seq: {seq_id})")
+            time.sleep(2)
+            current_state = self.printer_states.get(client.device_id, {}).get('gcode_state', 'UNKNOWN')
+            if current_state not in ['IDLE', 'FINISH', 'FAILED']:
+                time.sleep(3)
+                current_state = self.printer_states.get(client.device_id, {}).get('gcode_state', 'UNKNOWN')
+                if current_state not in ['IDLE', 'FINISH', 'FAILED']:
+                    raise RuntimeError(f"CRITICAL: Print FAILED to stop on {printer_name} after 5 seconds! Current State: {current_state}")
+
         except Exception as e:
-            logger.error(f"[{printer_name}] Failed to send stop command: {e}")
+            logger.error(f"[{printer_name}] STOP ACTION FAILED: {e}")
 
     # --- MQTT CALLBACK ---
     def on_message(self, device_id: str, data: dict):
@@ -322,10 +329,7 @@ class PrinterMonitor:
         ]
         for key in expired_keys:
             del self.used_log_hashes[key]
-        if expired_keys:
-            logger.info(f"[Memory] Pruned {len(expired_keys)} expired log entries.")
 
-    # --- MAIN LOOP (WATCHDOG) ---
     def start(self):
         printers = [PRINTER_SERIAL_1, PRINTER_SERIAL_2]
         logger.info(f"Starting Printer Guard for UID: {BAMBU_USER_ID}")
