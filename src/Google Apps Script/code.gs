@@ -160,3 +160,44 @@ function sendEmail() {
 
   return;
 }
+
+/**
+ * Receives log data from the Python script via HTTP POST and records it in the 'Activity' sheet.
+ * * This function acts as a webhook listener. It acquires a script lock to prevent concurrent 
+ * writes from overlapping, parses the JSON payload containing the print job details, 
+ * and appends a new row with the timestamp, printer name, user, print time, and enforcement action.
+ *
+ * @param {Object} e The event parameter for the web app, containing the postData.
+ * @return {TextOutput} A JSON response indicating whether the operation was a 'success' or 'error'.
+ */
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000); 
+  } catch (e) {
+    return ContentService.createTextOutput(JSON.stringify({result: 'error', error: 'Lock timeout'}));
+  }
+
+  try {
+    const params = JSON.parse(e.postData.contents);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName("Activity");
+
+    sheet.appendRow([
+      params.timestamp, 
+      params.printer, 
+      params.user, 
+      params.print_time,    
+      params.action, 
+      params.action_success,
+      params.reason
+    ]);
+    
+    return ContentService.createTextOutput(JSON.stringify({result: 'success'}));
+    
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({result: 'error', error: error.toString()}));
+  } finally {
+    lock.releaseLock();
+  }
+}

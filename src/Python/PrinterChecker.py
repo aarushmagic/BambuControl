@@ -21,6 +21,7 @@ LOG_SHEET_URL = os.getenv("LOG_SHEET_URL", "").strip()
 AUTH_SHEET_URL = os.getenv("AUTH_SHEET_URL", "").strip()
 PRINTER_NAME_1 = os.getenv("PRINTER_NAME_1", "").strip()
 PRINTER_NAME_2 = os.getenv("PRINTER_NAME_2", "").strip()
+ACTIVITY_WEBHOOK = os.getenv("ACTIVITY_WEBHOOK", "").strip()
 
 # --- Exempt Users Table ---
 EXEMPT_USERS = [
@@ -165,10 +166,44 @@ class PrinterMonitor:
             logger.error(f"[Sheet] Network Error: {e}")
             return None
 
+    # --- SHEET LOGGING HELPER ---
+    def log_to_sheet(self, printer_name: str, user: str, print_time: str, action: str, action_success: str, reason: str):
+        """Sends a log entry to the Google Sheet via the Apps Script Webhook."""
+        if not ACTIVITY_WEBHOOK:
+            return
+
+        timestamp = datetime.now().strftime("%m/%d/%Y %I:%M:%S %p")
+        
+        payload = {
+            "timestamp": timestamp,
+            "printer": printer_name,
+            "user": user,
+            "print_time": print_time,
+            "action": action,
+            "action_success": action_success,
+            "reason": reason
+        }
+
+        try:
+            requests.post(ACTIVITY_WEBHOOK, json=payload, timeout=5)
+        except Exception as e:
+            logger.error(f"[{printer_name}] Failed to upload log to sheet: {e}")
+
+    def get_print_time_formatted(self, device_id: str) -> str:
+        """Returns the remaining time formatted as HH:MM"""
+        try:
+            current_state = self.printer_states.get(device_id, {})
+            remaining_min = int(current_state.get('mc_remaining_time', 0))
+            hours = remaining_min // 60
+            minutes = remaining_min % 60
+            return f"{hours:02d}:{minutes:02d}"
+        except:
+            return "00:00"
+
     # --- ENFORCEMENT LOGIC ---
     def enforce_rules(self, device_id: str, client: MQTTClient, subtask_id: str):
         printer_name = PRINTER_MAP.get(device_id, "Unknown")
-        
+        print_time_str = self.get_print_time_formatted(device_id)
         # --- 1. FETCH LOG ---
         log_entry = None
         for attempt in range(1, 4): 
@@ -182,7 +217,8 @@ class PrinterMonitor:
 
         if not log_entry:
             logger.warning(f"[{printer_name}] 🛑 VIOLATION: Unlogged/Expired Print. Sending STOP.")
-            self.cancel_print(client, printer_name, "Unlogged")
+            success = self.cancel_print(client, printer_name, "Unlogged")
+            self.log_to_sheet(printer_name, "Unlogged", print_time_str, "Stopped", str(success), "Unlogged/Expired")
             return
 
         try:
@@ -205,18 +241,18 @@ class PrinterMonitor:
             stable_data = str(log_entry[:3]) 
 
         log_signature = hashlib.sha256(stable_data.encode()).hexdigest()
+        first_name = log_entry[COL_LOG_FIRST]
+        last_name = log_entry[COL_LOG_LAST]
+        full_name = f"{first_name} {last_name}"
 
         if log_signature in self.used_log_hashes:
             stored_id, _ = self.used_log_hashes[log_signature]
             if stored_id != subtask_id:
                 logger.warning(f"[{printer_name}] 🛑 VIOLATION: Log Reuse Detected. Log already used by Job {stored_id}. Sending STOP.")
-                self.cancel_print(client, printer_name, "Log Entry Reused")
+                success = self.cancel_print(client, printer_name, "Log Entry Reused")
+                self.log_to_sheet(printer_name, full_name, print_time_str, "Stopped", str(success), "Log Entry Reused")
                 return
         self.used_log_hashes[log_signature] = (subtask_id, end_dt)
-
-        first_name = log_entry[COL_LOG_FIRST]
-        last_name = log_entry[COL_LOG_LAST]
-        full_name = f"{first_name} {last_name}"
 
         log_f_norm = first_name.strip().lower()
         log_l_norm = last_name.strip().lower()
@@ -228,7 +264,8 @@ class PrinterMonitor:
 
         if not is_allowed:
             logger.warning(f"[{printer_name}] 🛑 VIOLATION: Unauthorized User ({full_name}). Sending STOP.")
-            self.cancel_print(client, printer_name, f"Unauthorized: {full_name}")
+            success = self.cancel_print(client, printer_name, f"Unauthorized: {full_name}")
+            self.log_to_sheet(printer_name, full_name, print_time_str, "Stopped", str(success), "Unauthorized User")
             return
         
         is_exempt = False
@@ -245,7 +282,8 @@ class PrinterMonitor:
 
             if remaining_min > MAX_DURATION_MIN:
                 logger.warning(f"[{printer_name}] 🛑 VIOLATION: Time Limit Exceeded ({remaining_min}m > {MAX_DURATION_MIN}m) by {full_name}. STOP.")
-                self.cancel_print(client, printer_name, f"Time Limit: {remaining_min}m > 12.5h")
+                success = self.cancel_print(client, printer_name, f"Time Limit: {remaining_min}m > 12.5h")
+                self.log_to_sheet(printer_name, full_name, print_time_str, "Stopped", str(success), f"Time Limit ({remaining_min}m > 12.5h)")
                 return
 
         if not is_exempt:
@@ -262,25 +300,36 @@ class PrinterMonitor:
                 if other_user_key == current_user_key:
                     other_name_display = PRINTER_MAP.get(other_serial, "Other Printer")
                     logger.warning(f"[{printer_name}] 🛑 VIOLATION: Concurrent Printing. User {full_name} is already active on {other_name_display}.")
-                    self.cancel_print(client, printer_name, f"Concurrent: {other_name_display}")
+                    success = self.cancel_print(client, printer_name, f"Concurrent: {other_name_display}")
+                    self.log_to_sheet(printer_name, full_name, print_time_str, "Stopped", str(success), f"Concurrent Printing on {other_name_display}")
                     return
+        
+        logger.info(f"[{printer_name}] ✅ Print authorized for {full_name}.")
+        self.log_to_sheet(printer_name, full_name, print_time_str, "Passed", "True", "Passed all rules")
 
-    def cancel_print(self, client: MQTTClient, printer_name: str, reason: str):
+    def cancel_print(self, client: MQTTClient, printer_name: str, reason: str) -> bool:
         try:
             seq_id = int(time.time())
             command = {"print": {"command": "stop", "sequence_id": seq_id}}
             payload = json.dumps(command)
             client.client.publish(f"device/{client.device_id}/request", payload)
+            
             time.sleep(2)
             current_state = self.printer_states.get(client.device_id, {}).get('gcode_state', 'UNKNOWN')
+            
             if current_state not in ['IDLE', 'FINISH', 'FAILED']:
                 time.sleep(3)
                 current_state = self.printer_states.get(client.device_id, {}).get('gcode_state', 'UNKNOWN')
                 if current_state not in ['IDLE', 'FINISH', 'FAILED']:
-                    raise RuntimeError(f"CRITICAL: Print FAILED to stop on {printer_name} after 5 seconds! Current State: {current_state}")
+                    logger.error(f"[{printer_name}] CRITICAL: Print FAILED to stop! State: {current_state}")
+                    return False
+
+            logger.info(f"[{printer_name}] STOP COMMAND SUCCESSFUL (Seq: {seq_id})")
+            return True
 
         except Exception as e:
-            logger.error(f"[{printer_name}] STOP ACTION FAILED: {e}")
+            logger.error(f"[{printer_name}] STOP ACTION FAILED with exception: {e}")
+            return False
 
     # --- MQTT CALLBACK ---
     def on_message(self, device_id: str, data: dict):
